@@ -116,6 +116,15 @@ def build_proj(fov_deg: ti.f32, aspect: ti.f32, zn: ti.f32, zf: ti.f32) -> ti.ma
     return scale @ trans @ persp
 
 @ti.func
+def set_pixel_thick(x: ti.i32, y: ti.i32, color: ti.math.vec3, buf: ti.template()):
+    # 2x2 thick pixel
+    for dx in ti.static(range(2)):
+        for dy in ti.static(range(2)):
+            px, py = x + dx, y + dy
+            if 0 <= px < WIDTH and 0 <= py < HEIGHT:
+                buf[px, py] = color
+
+@ti.func
 def draw_line_colored(x0: ti.i32, y0: ti.i32, x1: ti.i32, y1: ti.i32,
                       c0: ti.math.vec3, c1: ti.math.vec3,
                       buf: ti.template()):
@@ -130,8 +139,7 @@ def draw_line_colored(x0: ti.i32, y0: ti.i32, x1: ti.i32, y1: ti.i32,
     while True:
         t_val = ti.cast(step, ti.f32) / ti.cast(total, ti.f32) if total > 0 else 0.0
         color = c0 * (1.0 - t_val) + c1 * t_val
-        if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-            buf[x, y] = color
+        set_pixel_thick(x, y, color, buf)
         if x == x1 and y == y1:
             break
         e2 = 2 * err
@@ -215,7 +223,10 @@ def render_cube(ax: float, ay: float, az: float):
 # ================================================================
 
 def grab(buf) -> Image.Image:
+    # buf shape is (W, H, 3); PIL needs (H, W, 3) — transpose axes 0 and 1
     arr = (np.clip(buf.to_numpy(), 0.0, 1.0) * 255).astype(np.uint8)
+    arr = np.transpose(arr, (1, 0, 2))  # (W,H,3) -> (H,W,3)
+    arr = np.flipud(arr)                # flip Y: Taichi y=0 is bottom, PIL y=0 is top
     return Image.fromarray(arr, 'RGB')
 
 
