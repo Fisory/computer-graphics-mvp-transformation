@@ -16,6 +16,19 @@
 
 中心在原点的单位立方体同时绕 X、Y、Z 三轴旋转。透视效果让近处的边看起来更大，后面的边（蓝色系）和前面的边（红色系）在视觉上有明显区别。
 
+### 扩展任务：旋转插值（SLERP）
+
+![旋转插值演示](interp_demo.gif)
+
+同时渲染两个不同姿态的立方体，并用**四元数球面线性插值（SLERP）**展示从姿态 A 到姿态 B 的平滑过渡路径：
+
+- **蓝色（左）**：姿态 A，初始位置，无旋转
+- **青色（右）**：姿态 B，绕 X 轴 25°、绕 Y 轴 45°，平移至右侧
+- **灰色（中间）**：SLERP 路径上 5 个均匀采样的中间姿态（幽灵帧）
+- **金色**：沿插值路径自动往复运动的动画立方体
+
+旋转用四元数表示并做球面插值，位置做线性插值，两者同步推进参数 $t \in [0,1]$，实现空间中两个姿态之间的最短弧路径过渡。
+
 ## 原理
 
 三维物体显示到屏幕要经过三次变换，按顺序相乘：
@@ -93,11 +106,11 @@ pip install -r requirements.txt
 uv run python main.py
 ```
 
-| 按键  | 操作     |
-| ----- | -------- |
+| 按键  | 操作       |
+| ----- | ---------- |
 | `A`   | 逆时针旋转 |
 | `D`   | 顺时针旋转 |
-| `ESC` | 退出     |
+| `ESC` | 退出       |
 
 ### 立方体
 
@@ -105,13 +118,27 @@ uv run python main.py
 uv run python cube.py
 ```
 
-| 按键    | 操作       |
-| ------- | ---------- |
-| `W / S` | 绕 X 轴旋转 |
-| `A / D` | 绕 Y 轴旋转 |
-| `Q / E` | 绕 Z 轴旋转 |
-| `空格`  | 切换自动旋转 |
-| `ESC`   | 退出       |
+| 按键    | 操作                                    |
+| ------- | --------------------------------------- |
+| `W / S` | 绕 X 轴旋转                             |
+| `A / D` | 绕 Y 轴旋转                             |
+| `Q / E` | 绕 Z 轴旋转                             |
+| `空格`  | 切换自动旋转                            |
+| `I`     | 切换插值模式（SLERP 在两固定姿态间往复） |
+| `ESC`   | 退出                                    |
+
+### 旋转插值可视化
+
+```bash
+uv run python interp_cube.py
+```
+
+同屏显示姿态 A、姿态 B 及其插值路径。
+
+| 按键   | 操作         |
+| ------ | ------------ |
+| `空格` | 暂停/继续动画 |
+| `ESC`  | 退出         |
 
 ### 重新生成演示 GIF
 
@@ -119,17 +146,25 @@ uv run python cube.py
 uv run python demo_generator.py
 ```
 
-输出 `triangle_demo.gif` 和 `cube_demo.gif`，72 帧和 90 帧，每帧 55 ms。
+输出三个 GIF：
+
+| 文件 | 内容 | 帧数 |
+| ---- | ---- | ---- |
+| `triangle_demo.gif` | 三角形旋转 | 72 帧 |
+| `cube_demo.gif` | 立方体三轴旋转 | 90 帧 |
+| `interp_demo.gif` | 双姿态 SLERP 插值路径 | 120 帧 |
 
 ## 代码结构
 
 ```text
 实验二/
 ├── main.py              # 三角形：MVP 变换 + 交互渲染
-├── cube.py              # 立方体：三轴旋转 + 交互渲染
+├── cube.py              # 立方体：三轴旋转 + 交互渲染（含 SLERP 插值模式）
+├── interp_cube.py       # 旋转插值可视化：双姿态 + 幽灵帧 + 动画立方体
 ├── demo_generator.py    # 离线生成演示 GIF（独立实现，不依赖 main/cube）
 ├── triangle_demo.gif    # 三角形演示动画
 ├── cube_demo.gif        # 立方体演示动画
+├── interp_demo.gif      # 旋转插值演示动画
 ├── pyproject.toml       # uv 项目配置
 ├── requirements.txt     # pip 兼容依赖列表
 ├── .gitignore
@@ -138,6 +173,8 @@ uv run python demo_generator.py
 
 ### 核心函数
 
+**`main.py` / `cube.py`**
+
 `get_model_matrix(angle)` — 绕 Z 轴旋转矩阵（角度制输入）
 
 `get_view_matrix(eye_pos)` — 将相机平移至原点的视图矩阵
@@ -145,6 +182,16 @@ uv run python demo_generator.py
 `get_projection_matrix(fov, aspect, zNear, zFar)` — 透视投影矩阵，先挤压后正交
 
 `transform_and_draw(angle, pixels)` — 执行完整 MVP 变换并用 Bresenham 算法绘制线框
+
+**`interp_cube.py`**
+
+`euler_to_quat(ax, ay, az)` — 欧拉角（ZYX 顺序）转单位四元数
+
+`quat_slerp(qa, qb, t)` — 球面线性插值，自动选最短弧路径
+
+`quat_to_mat4(q)` — 四元数转 4×4 旋转矩阵
+
+`xform_cube_to_slot(slot, q, tx, ty, tz)` — 将指定姿态的立方体变换结果写入 NDC 缓冲槽
 
 ## 常见问题
 
@@ -163,6 +210,10 @@ uv run python demo_generator.py
 **能再加物体吗？**
 
 定义新的顶点 field 和边 field，在绘制循环里套同一套 MVP 变换逻辑就行。
+
+**SLERP 和 LERP 插值旋转有什么区别？**
+
+LERP（线性插值）直接对旋转矩阵或欧拉角插值，会导致中间帧速度不均匀、旋转轴漂移。SLERP 在四元数空间的单位超球面上按等角速度插值，保证最短路径、恒定角速度，是动画中旋转过渡的标准方法。
 
 ## 参考
 
