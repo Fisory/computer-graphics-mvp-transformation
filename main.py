@@ -18,6 +18,9 @@ colors[0] = ti.Vector([1.0, 0.0, 0.0])  # 红色
 colors[1] = ti.Vector([0.0, 1.0, 0.0])  # 绿色
 colors[2] = ti.Vector([0.0, 0.0, 1.0])  # 蓝色
 
+# NDC 中间缓冲（全局 field，不能在 kernel 内部声明 field）
+ndc = ti.Vector.field(2, dtype=ti.f32, shape=3)
+
 
 @ti.func
 def get_model_matrix(angle: ti.f32) -> ti.math.mat4:
@@ -41,12 +44,12 @@ def get_model_matrix(angle: ti.f32) -> ti.math.mat4:
     # | sin   cos  0  0 |
     # |  0     0   1  0 |
     # |  0     0   0  1 |
-    return ti.math.mat4(
-        [cos_a, sin_a, 0.0, 0.0],
-        [-sin_a, cos_a, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0]
-    )
+    return ti.Matrix([
+        [cos_a, -sin_a, 0.0, 0.0],
+        [sin_a,  cos_a, 0.0, 0.0],
+        [0.0,   0.0,   1.0, 0.0],
+        [0.0,   0.0,   0.0, 1.0]
+    ])
 
 
 @ti.func
@@ -66,12 +69,12 @@ def get_view_matrix(eye_pos: ti.math.vec3) -> ti.math.mat4:
     # | 0  1  0  -y |
     # | 0  0  1  -z |
     # | 0  0  0   1 |
-    return ti.math.mat4(
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [-eye_pos[0], -eye_pos[1], -eye_pos[2], 1.0]
-    )
+    return ti.Matrix([
+        [1.0, 0.0, 0.0, -eye_pos[0]],
+        [0.0, 1.0, 0.0, -eye_pos[1]],
+        [0.0, 0.0, 1.0, -eye_pos[2]],
+        [0.0, 0.0, 0.0, 1.0]
+    ])
 
 
 @ti.func
@@ -104,16 +107,16 @@ def get_projection_matrix(eye_fov: ti.f32, aspect_ratio: ti.f32, zNear: ti.f32, 
     
     # 透视到正交矩阵 M_persp->ortho
     # 将透视平截头体挤压为正交长方体
-    # | n  0  0  0 |
-    # | 0  n  0  0 |
-    # | 0  0 n+f -nf|
-    # | 0  0  1  0 |
-    persp_to_ortho = ti.math.mat4(
-        [n, 0.0, 0.0, 0.0],
-        [0.0, n, 0.0, 0.0],
-        [0.0, 0.0, n + f, 1.0],
-        [0.0, 0.0, -n * f, 0.0]
-    )
+    # | n  0  0   0  |
+    # | 0  n  0   0  |
+    # | 0  0 n+f -nf |
+    # | 0  0  1   0  |
+    persp_to_ortho = ti.Matrix([
+        [n,   0.0, 0.0,     0.0],
+        [0.0, n,   0.0,     0.0],
+        [0.0, 0.0, n + f,  -n * f],
+        [0.0, 0.0, 1.0,     0.0]
+    ])
     
     # 正交投影矩阵 M_ortho
     # 先平移到原点,再缩放到[-1,1]^3
@@ -122,24 +125,24 @@ def get_projection_matrix(eye_fov: ti.f32, aspect_ratio: ti.f32, zNear: ti.f32, 
     # |   0     2/(t-b)     0      0 |
     # |   0        0     2/(n-f)   0 |
     # |   0        0        0      1 |
-    ortho_scale = ti.math.mat4(
-        [2.0 / (r - l), 0.0, 0.0, 0.0],
-        [0.0, 2.0 / (t - b), 0.0, 0.0],
-        [0.0, 0.0, 2.0 / (n - f), 0.0],
-        [0.0, 0.0, 0.0, 1.0]
-    )
+    ortho_scale = ti.Matrix([
+        [2.0 / (r - l), 0.0,           0.0,           0.0],
+        [0.0,           2.0 / (t - b), 0.0,           0.0],
+        [0.0,           0.0,           2.0 / (n - f), 0.0],
+        [0.0,           0.0,           0.0,           1.0]
+    ])
     
     # 平移矩阵
     # | 1  0  0  -(r+l)/2 |
     # | 0  1  0  -(t+b)/2 |
     # | 0  0  1  -(n+f)/2 |
     # | 0  0  0      1    |
-    ortho_translate = ti.math.mat4(
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [-(r + l) / 2.0, -(t + b) / 2.0, -(n + f) / 2.0, 1.0]
-    )
+    ortho_translate = ti.Matrix([
+        [1.0, 0.0, 0.0, -(r + l) / 2.0],
+        [0.0, 1.0, 0.0, -(t + b) / 2.0],
+        [0.0, 0.0, 1.0, -(n + f) / 2.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ])
     
     # M_ortho = 缩放 @ 平移
     ortho = ortho_scale @ ortho_translate
@@ -149,54 +152,36 @@ def get_projection_matrix(eye_fov: ti.f32, aspect_ratio: ti.f32, zNear: ti.f32, 
 
 
 @ti.kernel
-def transform_and_draw(angle: ti.f32, pixels: ti.template()):
+def xform_triangle(angle: ti.f32):
     """
-    对顶点进行MVP变换并绘制到屏幕
+    第一步：对三角形顶点执行 MVP 变换，结果写入全局 ndc field
     """
-    # 相机参数
     eye_pos = ti.math.vec3(0.0, 0.0, 5.0)
-    
-    # 获取MVP矩阵
     model = get_model_matrix(angle)
     view = get_view_matrix(eye_pos)
     projection = get_projection_matrix(45.0, 1.0, 0.1, 50.0)
-    
-    # MVP = Projection @ View @ Model
     mvp = projection @ view @ model
-    
-    # 变换后的顶点(NDC坐标)
-    transformed = ti.Vector.field(3, dtype=ti.f32, shape=3)
-    
-    # 对每个顶点进行变换
+
     for i in range(3):
-        # 转换为齐次坐标
         v = ti.math.vec4(vertices[i][0], vertices[i][1], vertices[i][2], 1.0)
-        
-        # MVP变换
-        v_transformed = mvp @ v
-        
-        # 透视除法
-        if v_transformed[3] != 0.0:
-            v_transformed /= v_transformed[3]
-        
-        # 存储NDC坐标
-        transformed[i] = ti.math.vec3(v_transformed[0], v_transformed[1], v_transformed[2])
-    
-    # 绘制三角形的三条边
+        v_t = mvp @ v
+        if v_t[3] != 0.0:
+            v_t /= v_t[3]
+        ndc[i] = ti.math.vec2(v_t[0], v_t[1])
+
+
+@ti.kernel
+def draw_triangle(pixels: ti.template()):
+    """
+    第二步：读取 ndc field，将三条边用 Bresenham 算法绘制到像素缓冲
+    """
     for i in range(3):
-        # 起点和终点索引
-        start_idx = i
-        end_idx = (i + 1) % 3
-        
-        # NDC坐标转换到屏幕坐标
-        # NDC范围[-1,1] -> 屏幕坐标[0, width/height]
-        x0 = int((transformed[start_idx][0] + 1.0) * width / 2.0)
-        y0 = int((transformed[start_idx][1] + 1.0) * height / 2.0)
-        x1 = int((transformed[end_idx][0] + 1.0) * width / 2.0)
-        y1 = int((transformed[end_idx][1] + 1.0) * height / 2.0)
-        
-        # 使用Bresenham算法绘制线段
-        draw_line(x0, y0, x1, y1, colors[start_idx], colors[end_idx], pixels)
+        j = (i + 1) % 3
+        x0 = int((ndc[i][0] + 1.0) * width  / 2.0)
+        y0 = int((ndc[i][1] + 1.0) * height / 2.0)
+        x1 = int((ndc[j][0] + 1.0) * width  / 2.0)
+        y1 = int((ndc[j][1] + 1.0) * height / 2.0)
+        draw_line(x0, y0, x1, y1, colors[i], colors[j], pixels)
 
 
 @ti.func
@@ -214,13 +199,12 @@ def draw_line(x0: ti.i32, y0: ti.i32, x1: ti.i32, y1: ti.i32,
     x, y = x0, y0
     total_steps = ti.max(dx, dy)
     step = 0
-    
+    t = 0.0
+
     while True:
         # 颜色插值
         if total_steps > 0:
             t = ti.cast(step, ti.f32) / ti.cast(total_steps, ti.f32)
-        else:
-            t = 0.0
         color = color0 * (1.0 - t) + color1 * t
         
         # 绘制像素
@@ -271,8 +255,9 @@ def main():
         # 清空画布
         pixels.fill(0.0)
         
-        # 变换并绘制
-        transform_and_draw(angle, pixels)
+        # 变换并绘制（两步：先 MVP 变换写入 ndc，再绘制）
+        xform_triangle(angle)
+        draw_triangle(pixels)
         
         # 显示
         gui.set_image(pixels)
